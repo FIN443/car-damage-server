@@ -162,3 +162,7 @@ cython_debug/
 
 */.DS_Store
 .DS_Store
+
+# custom
+instance/saved_models/*
+instance/uploads/*

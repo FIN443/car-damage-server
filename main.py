@@ -5,6 +5,7 @@ from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 import cv2
 from PIL import Image
+from models import Yolov4
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg"}
 
@@ -30,30 +31,38 @@ def index():
 @app.route("/predict", methods=["POST"])
 def predict():
     if request.method == "POST":
-        if "image" not in request.files:
+        if "image0" not in request.files:
             return jsonify({"ok": False, "message": "not exist image"})
-        file = request.files["image"]
-        file.save(os.path.join(uploads_dir, file.filename))
+        image_num = len(request.files)
+        if image_num >= 5:
+            return jsonify({"ok": False, "message": "too many images"})
+
+        # Save images
+        for i in range(image_num):
+            file = request.files[f"image{i}"]
+            file.save(os.path.join(uploads_dir, file.filename))
 
         # 1) load model
-        # model = Yolov4(weight_path=None, class_name_path="instance/classes.txt")
+        model = Yolov4(weight_path="instance/saved_models/weights.h5", class_name_path="instance/classes.txt")
 
-        # 2) load weights
-        # model.yolo_model.load_weights("instance/saved_models/weights.h5")
+        data = []
+        # Predict images
+        for i in range(image_num):
+            # 2) load image
+            cv2_img = cv2.imread(f"instance/uploads/image{i}.png")[:, :, ::-1]
 
-        # 3) load image
-        # cv2_img = cv2.imread("instance/uploads/image.jpg")[:, :, ::-1]
+            # 3) predict image
+            result_img, result_bbox = model.predict_img(cv2_img, return_output=True, plot_img=False, show_shape=False, show_box_count=False)
 
-        # 4) predict image
-        # result_img, result_bbox = model.predict_img(cv2_img, return_output=True)
+            # 4) get damage categories
+            kind = result_bbox["class_name"].tolist()
 
-        # 5) get damage categories
+            # 5) encoding image
+            real_img = Image.fromarray(result_img)
+            endcoded_img = get_response_image(real_img)
+            data.append({"kind": kind, "imageBytes": endcoded_img})
 
-        # 6) encoding image
-        result_img = cv2.imread("instance/uploads/image.jpg")[:, :, ::-1]
-        real_img = Image.fromarray(result_img)
-        endcoded_img = get_response_image(real_img)
-        return jsonify({"ok": True, "message": "done", "data": {"kind": "damage", "imageBytes": endcoded_img}})
+        return jsonify({"ok": True, "message": "done", "data": data})
 
 
 if __name__ == "__main__":
