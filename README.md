@@ -13,7 +13,6 @@ Car damage part detection server with YOLO custom.
 ```
 tensorflow==2.8.1
 numpy==1.21.5
-Pillow==9.1.0
 flask==2.1.2
 flask_cors==3.0.10
 opencv-python==4.6.0.66

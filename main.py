@@ -1,10 +1,8 @@
 import os
-import io
 from base64 import encodebytes
 from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 import cv2
-from PIL import Image
 from models import Yolov4
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg"}
@@ -16,10 +14,9 @@ uploads_dir = os.path.join(app.instance_path, "uploads")
 os.makedirs(uploads_dir, exist_ok=True)
 
 
-def get_response_image(pil_img):
-    byte_arr = io.BytesIO()
-    pil_img.save(byte_arr, format="PNG")  # convert the PIL image to byte array
-    encoded_img = encodebytes(byte_arr.getvalue()).decode("ascii")  # encode as base64
+def get_response_image(img):
+    binary_cv = cv2.imencode('.PNG', img)[1].tobytes() # convert image to byte array
+    encoded_img = encodebytes(binary_cv).decode("ascii")  # encode as base64
     return encoded_img
 
 
@@ -42,16 +39,15 @@ def predict():
         for i in range(image_num):
             file = request.files[f"image{i}"]
             file.save(os.path.join(uploads_dir, file.filename))
+            # 1) load images
             cv2_img.append(cv2.imread(f"instance/uploads/image{i}.png")[:, :, ::-1])
 
-        # 1) load model
+        # 2) load model
         model = Yolov4(weight_path="instance/saved_models/weights.h5", class_name_path="instance/classes.txt")
 
         data = []
         # Predict images
         for i in range(image_num):
-            # 2) load image
-
             # 3) predict image
             result_img, result_bbox = model.predict_img(cv2_img[i], return_output=True, plot_img=False, show_shape=False, show_box_count=False)
 
@@ -60,8 +56,7 @@ def predict():
             kind = list(set(kind))
 
             # 5) encoding image
-            real_img = Image.fromarray(result_img)
-            endcoded_img = get_response_image(real_img)
+            endcoded_img = get_response_image(result_img[:,:,::-1])
             data.append({"kind": kind, "imageBytes": endcoded_img})
 
         return jsonify({"ok": True, "message": "done", "data": data})
