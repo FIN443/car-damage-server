@@ -34,13 +34,15 @@ def predict():
         if "image0" not in request.files:
             return jsonify({"ok": False, "message": "not exist image"})
         image_num = len(request.files)
-        if image_num >= 5:
+        if image_num > 8:
             return jsonify({"ok": False, "message": "too many images"})
 
+        cv2_img = []
         # Save images
         for i in range(image_num):
             file = request.files[f"image{i}"]
             file.save(os.path.join(uploads_dir, file.filename))
+            cv2_img.append(cv2.imread(f"instance/uploads/image{i}.png")[:, :, ::-1])
 
         # 1) load model
         model = Yolov4(weight_path="instance/saved_models/weights.h5", class_name_path="instance/classes.txt")
@@ -49,13 +51,13 @@ def predict():
         # Predict images
         for i in range(image_num):
             # 2) load image
-            cv2_img = cv2.imread(f"instance/uploads/image{i}.png")[:, :, ::-1]
 
             # 3) predict image
-            result_img, result_bbox = model.predict_img(cv2_img, return_output=True, plot_img=False, show_shape=False, show_box_count=False)
+            result_img, result_bbox = model.predict_img(cv2_img[i], return_output=True, plot_img=False, show_shape=False, show_box_count=False)
 
             # 4) get damage categories
             kind = result_bbox["class_name"].tolist()
+            kind = list(set(kind))
 
             # 5) encoding image
             real_img = Image.fromarray(result_img)
