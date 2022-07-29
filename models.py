@@ -1,45 +1,43 @@
 import numpy as np
 import cv2
 import os
-import json
 from time import time
 from tqdm import tqdm
-from glob import glob
-import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras import layers, models, optimizers
 
 from custom_layers import yolov4_neck, yolov4_head, nms
-from utils import load_weights, get_detection_data, draw_bbox, voc_ap, draw_plot_func, read_txt_to_list, visualize
+from utils import load_weights, get_detection_data, draw_bbox
 from config import yolo_config
 from loss import yolo_loss
 
 
 class Yolov4(object):
-    def __init__(self,
-                 weight_path=None,
-                 class_name_path='coco_classes.txt',
-                 config=yolo_config,
-                 ):
-        assert config['img_size'][0] == config['img_size'][1], 'not support yet'
-        assert config['img_size'][0] % config['strides'][-1] == 0, 'must be a multiple of last stride'
+    def __init__(
+        self,
+        weight_path=None,
+        class_name_path="coco_classes.txt",
+        config=yolo_config,
+    ):
+        assert config["img_size"][0] == config["img_size"][1], "not support yet"
+        assert config["img_size"][0] % config["strides"][-1] == 0, "must be a multiple of last stride"
         self.class_names = [line.strip() for line in open(class_name_path).readlines()]
-        self.img_size = yolo_config['img_size']
+        self.img_size = yolo_config["img_size"]
         self.num_classes = len(self.class_names)
         self.weight_path = weight_path
-        self.anchors = np.array(yolo_config['anchors']).reshape((3, 3, 2))
-        self.xyscale = yolo_config['xyscale']
-        self.strides = yolo_config['strides']
+        self.anchors = np.array(yolo_config["anchors"]).reshape((3, 3, 2))
+        self.xyscale = yolo_config["xyscale"]
+        self.strides = yolo_config["strides"]
         self.output_sizes = [self.img_size[0] // s for s in self.strides]
-        self.class_color = {name: list(np.random.random(size=3)*255) for name in self.class_names}
+        self.class_color = {name: list(np.random.random(size=3) * 255) for name in self.class_names}
         # Training
-        self.max_boxes = yolo_config['max_boxes']
-        self.iou_loss_thresh = yolo_config['iou_loss_thresh']
+        self.max_boxes = yolo_config["max_boxes"]
+        self.iou_loss_thresh = yolo_config["iou_loss_thresh"]
         self.config = yolo_config
-        assert self.num_classes > 0, 'no classes detected!'
+        assert self.num_classes > 0, "no classes detected!"
 
         tf.keras.backend.clear_session()
-        if yolo_config['num_gpu'] > 1:
+        if yolo_config["num_gpu"] > 1:
             mirrored_strategy = tf.distribute.MirroredStrategy()
             with mirrored_strategy.scope():
                 self.build_model(load_pretrained=True if self.weight_path else False)
@@ -54,72 +52,80 @@ class Yolov4(object):
 
         # Build training model
         y_true = [
-            layers.Input(name='input_2', shape=(52, 52, 3, (self.num_classes + 5))),  # label small boxes
-            layers.Input(name='input_3', shape=(26, 26, 3, (self.num_classes + 5))),  # label medium boxes
-            layers.Input(name='input_4', shape=(13, 13, 3, (self.num_classes + 5))),  # label large boxes
-            layers.Input(name='input_5', shape=(self.max_boxes, 4)),  # true bboxes
+            layers.Input(name="input_2", shape=(52, 52, 3, (self.num_classes + 5))),  # label small boxes
+            layers.Input(name="input_3", shape=(26, 26, 3, (self.num_classes + 5))),  # label medium boxes
+            layers.Input(name="input_4", shape=(13, 13, 3, (self.num_classes + 5))),  # label large boxes
+            layers.Input(name="input_5", shape=(self.max_boxes, 4)),  # true bboxes
         ]
-        loss_list = tf.keras.layers.Lambda(yolo_loss, name='yolo_loss',
-                                           arguments={'num_classes': self.num_classes,
-                                                      'iou_loss_thresh': self.iou_loss_thresh,
-                                                      'anchors': self.anchors})([*self.yolo_model.output, *y_true])
+        loss_list = tf.keras.layers.Lambda(
+            yolo_loss, name="yolo_loss", arguments={"num_classes": self.num_classes, "iou_loss_thresh": self.iou_loss_thresh, "anchors": self.anchors}
+        )([*self.yolo_model.output, *y_true])
         self.training_model = models.Model([self.yolo_model.input, *y_true], loss_list)
 
         # Build inference model
         yolov4_output = yolov4_head(yolov4_output, self.num_classes, self.anchors, self.xyscale)
         # output: [boxes, scores, classes, valid_detections]
-        self.inference_model = models.Model(input_layer,
-                                            nms(yolov4_output, self.img_size, self.num_classes,
-                                                iou_threshold=self.config['iou_threshold'],
-                                                score_threshold=self.config['score_threshold']))
+        self.inference_model = models.Model(
+            input_layer,
+            nms(
+                yolov4_output,
+                self.img_size,
+                self.num_classes,
+                iou_threshold=self.config["iou_threshold"],
+                score_threshold=self.config["score_threshold"],
+            ),
+        )
 
-        if load_pretrained and self.weight_path: # and self.weight_path.endswith('.weights'):
-            if self.weight_path.endswith('.weights'):
+        if load_pretrained and self.weight_path:  # and self.weight_path.endswith('.weights'):
+            if self.weight_path.endswith(".weights"):
                 load_weights(self.yolo_model, self.weight_path)
-                print(f'load from {self.weight_path}')
-            elif self.weight_path.endswith('.h5'):
+                print(f"load from {self.weight_path}")
+            elif self.weight_path.endswith(".h5"):
                 self.training_model.load_weights(self.weight_path)
-                print(f'load from {self.weight_path}')
+                print(f"load from {self.weight_path}")
 
-        self.training_model.compile(optimizer=optimizers.Adam(lr=1e-4),
-                                    loss={'yolo_loss': lambda y_true, y_pred: y_pred})
+        self.training_model.compile(optimizer=optimizers.Adam(lr=1e-4), loss={"yolo_loss": lambda y_true, y_pred: y_pred})
 
     def load_model(self, path):
         self.yolo_model = models.load_model(path, compile=False)
         yolov4_output = yolov4_head(self.yolo_model.output, self.num_classes, self.anchors, self.xyscale)
-        self.inference_model = models.Model(self.yolo_model.input,
-                                            nms(yolov4_output, self.img_size, self.num_classes))  # [boxes, scores, classes, valid_detections]
+        self.inference_model = models.Model(
+            self.yolo_model.input, nms(yolov4_output, self.img_size, self.num_classes)
+        )  # [boxes, scores, classes, valid_detections]
 
     def save_model(self, path):
         self.yolo_model.save(path)
 
     def preprocess_img(self, img):
         img = cv2.resize(img, self.img_size[:2])
-        img = img / 255.
+        img = img / 255.0
         return img
 
     def fit(self, train_data_gen, epochs, val_data_gen=None, initial_epoch=0, callbacks=None):
-        self.training_model.fit(train_data_gen,
-                                steps_per_epoch=len(train_data_gen),
-                                validation_data=val_data_gen,
-                                validation_steps=len(val_data_gen),
-                                epochs=epochs,
-                                callbacks=callbacks,
-                                initial_epoch=initial_epoch)
+        self.training_model.fit(
+            train_data_gen,
+            steps_per_epoch=len(train_data_gen),
+            validation_data=val_data_gen,
+            validation_steps=len(val_data_gen),
+            epochs=epochs,
+            callbacks=callbacks,
+            initial_epoch=initial_epoch,
+        )
+
     # raw_img: RGB
-    def predict_img(self, raw_img, random_color=True, plot_img=True, figsize=(10, 10), show_text=True, return_output=False, show_shape=True, show_box_count=True):
+    def predict_img(
+        self, raw_img, random_color=True, plot_img=True, figsize=(10, 10), show_text=True, return_output=False, show_shape=True, show_box_count=True
+    ):
         if show_shape:
-            print('img shape: ', raw_img.shape)
+            print("img shape: ", raw_img.shape)
         img = self.preprocess_img(raw_img)
         imgs = np.expand_dims(img, axis=0)
         pred_output = self.inference_model.predict(imgs)
-        detections = get_detection_data(img=raw_img,
-                                        model_outputs=pred_output,
-                                        class_names=self.class_names,
-                                        show_box_count=show_box_count)                                    
+        detections = get_detection_data(img=raw_img, model_outputs=pred_output, class_names=self.class_names, show_box_count=show_box_count)
 
-        output_img = draw_bbox(raw_img, detections, cmap=self.class_color, random_color=random_color, figsize=figsize,
-                  show_text=show_text, show_img=plot_img)
+        output_img = draw_bbox(
+            raw_img, detections, cmap=self.class_color, random_color=random_color, figsize=figsize, show_text=show_text, show_img=plot_img
+        )
         if return_output:
             return output_img, detections
         else:
@@ -132,22 +138,22 @@ class Yolov4(object):
     def export_gt(self, annotation_path, gt_folder_path):
         with open(annotation_path) as file:
             for line in file:
-                line = line.split(' ')
-                filename = line[0].split(os.sep)[-1].split('.')[0]
+                line = line.split(" ")
+                filename = line[0].split(os.sep)[-1].split(".")[0]
                 objs = line[1:]
                 # export txt file
-                with open(os.path.join(gt_folder_path, filename + '.txt'), 'w') as output_file:
+                with open(os.path.join(gt_folder_path, filename + ".txt"), "w") as output_file:
                     for obj in objs:
-                        x_min, y_min, x_max, y_max, class_id = [float(o) for o in obj.strip().split(',')]
-                        output_file.write(f'{self.class_names[int(class_id)]} {x_min} {y_min} {x_max} {y_max}\n')
+                        x_min, y_min, x_max, y_max, class_id = [float(o) for o in obj.strip().split(",")]
+                        output_file.write(f"{self.class_names[int(class_id)]} {x_min} {y_min} {x_max} {y_max}\n")
 
     def export_prediction(self, annotation_path, pred_folder_path, img_folder_path, bs=2):
         with open(annotation_path) as file:
-            img_paths = [os.path.join(img_folder_path, line.split(' ')[0].split(os.sep)[-1]) for line in file]
+            img_paths = [os.path.join(img_folder_path, line.split(" ")[0].split(os.sep)[-1]) for line in file]
             # print(img_paths[:20])
             for batch_idx in tqdm(range(0, len(img_paths), bs)):
                 # print(len(img_paths), batch_idx, batch_idx*bs, (batch_idx+1)*bs)
-                paths = img_paths[batch_idx:batch_idx+bs]
+                paths = img_paths[batch_idx : batch_idx + bs]
                 # print(paths)
                 # read and process img
                 imgs = np.zeros((len(paths), *self.img_size))
@@ -167,22 +173,21 @@ class Yolov4(object):
                     classes = b_classes[k, :num_boxes]
                     scores = b_scores[k, :num_boxes]
                     # print(raw_img_shape)
-                    boxes[:, [0, 2]] = (boxes[:, [0, 2]] * raw_img_shape[1])  # w
-                    boxes[:, [1, 3]] = (boxes[:, [1, 3]] * raw_img_shape[0])  # h
+                    boxes[:, [0, 2]] = boxes[:, [0, 2]] * raw_img_shape[1]  # w
+                    boxes[:, [1, 3]] = boxes[:, [1, 3]] * raw_img_shape[0]  # h
                     cls_names = [self.class_names[int(c)] for c in classes]
                     # print(raw_img_shape, boxes.astype(int), cls_names, scores)
 
                     img_path = paths[k]
-                    filename = img_path.split(os.sep)[-1].split('.')[0]
+                    filename = img_path.split(os.sep)[-1].split(".")[0]
                     # print(filename)
-                    output_path = os.path.join(pred_folder_path, filename+'.txt')
-                    with open(output_path, 'w') as pred_file:
+                    output_path = os.path.join(pred_folder_path, filename + ".txt")
+                    with open(output_path, "w") as pred_file:
                         for box_idx in range(num_boxes):
                             b = boxes[box_idx]
-                            pred_file.write(f'{cls_names[box_idx]} {scores[box_idx]} {b[0]} {b[1]} {b[2]} {b[3]}\n')
+                            pred_file.write(f"{cls_names[box_idx]} {scores[box_idx]} {b[0]} {b[1]} {b[2]} {b[3]}\n")
 
-
-    def eval_map(self, gt_folder_path, pred_folder_path, temp_json_folder_path, output_files_path):
+    ''' def eval_map(self, gt_folder_path, pred_folder_path, temp_json_folder_path, output_files_path):
         """Process Gt"""
         ground_truth_files_list = glob(gt_folder_path + '/*.txt')
         assert len(ground_truth_files_list) > 0, 'no ground truth file'
@@ -508,68 +513,68 @@ class Yolov4(object):
                 plot_color,
                 ""
             )
+ '''
 
     def predict_raw(self, img_path):
         raw_img = cv2.imread(img_path)
-        print('img shape: ', raw_img.shape)
+        print("img shape: ", raw_img.shape)
         img = self.preprocess_img(raw_img)
         imgs = np.expand_dims(img, axis=0)
         return self.yolo_model.predict(imgs)
 
     def predict_nonms(self, img_path, iou_threshold=0.413, score_threshold=0.1):
         raw_img = cv2.imread(img_path)
-        print('img shape: ', raw_img.shape)
+        print("img shape: ", raw_img.shape)
         img = self.preprocess_img(raw_img)
         imgs = np.expand_dims(img, axis=0)
         yolov4_output = self.yolo_model.predict(imgs)
         output = yolov4_head(yolov4_output, self.num_classes, self.anchors, self.xyscale)
         pred_output = nms(output, self.img_size, self.num_classes, iou_threshold, score_threshold)
         pred_output = [p.numpy() for p in pred_output]
-        detections = get_detection_data(img=raw_img,
-                                        model_outputs=pred_output,
-                                        class_names=self.class_names)
+        detections = get_detection_data(img=raw_img, model_outputs=pred_output, class_names=self.class_names)
         draw_bbox(raw_img, detections, cmap=self.class_color, random_color=True)
         return detections
 
     def search_in_video(self, video_path):
         vid = cv2.VideoCapture(video_path)
-        while (vid.isOpened()):
+        while vid.isOpened():
             ret, frame = vid.read()
             if ret:
                 since = time()
                 ori_h, ori_w = frame.shape[:2]
-                
-                bboxes_df = self.predict_img(frame, random_color=True, plot_img=False, show_text=True, return_output=False, show_shape=False, show_box_count=False)
+
+                bboxes_df = self.predict_img(
+                    frame, random_color=True, plot_img=False, show_text=True, return_output=False, show_shape=False, show_box_count=False
+                )
                 # class name
-                class_ids = bboxes_df['class_name']
-                
+                class_ids = bboxes_df["class_name"]
 
                 # bbox x_center, y_center, w, h
                 bboxes = np.zeros((len(class_ids), 4))
-                bboxes[:, 0] = bboxes_df['x1']
-                bboxes[:, 1] = bboxes_df['y1']
-                bboxes[:, 2] = bboxes_df['x2']
-                bboxes[:, 3] = bboxes_df['y2']
+                bboxes[:, 0] = bboxes_df["x1"]
+                bboxes[:, 1] = bboxes_df["y1"]
+                bboxes[:, 2] = bboxes_df["x2"]
+                bboxes[:, 3] = bboxes_df["y2"]
 
-                text= f"{(time() - since)*1000:.0f}ms/image"
-                
+                text = f"{(time() - since)*1000:.0f}ms/image"
+
                 if len(bboxes) > 0:
-                    bboxes[:, [0,2]] *= (ori_w/self.img_size[0])
-                    bboxes[:, [1,3]] *= (ori_h/self.img_size[1])
+                    bboxes[:, [0, 2]] *= ori_w / self.img_size[0]
+                    bboxes[:, [1, 3]] *= ori_h / self.img_size[1]
                     # bboxes[:, 2].clip(min=0, max=ori_w)
                     # bboxes[:, 3].clip(min=0, max=ori_h)
                     result = visualize(frame, bboxes, class_ids)
                 else:
                     result = frame
-                    
+
                 cv2.putText(result, text, (20, 40), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 2)
-                cv2.imshow('camera', result)
-                
+                cv2.imshow("camera", result)
+
                 key = cv2.waitKey(1)
                 if key == 27:
                     break
-                if key == ord('s'):
+                if key == ord("s"):
                     cv2.waitKey()
-            
+
         vid.release()
         cv2.destroyAllWindows()

@@ -1,7 +1,9 @@
 tensorflow-cpu==2.8.1
 numpy==1.21.5
+pandas==1.4.2
 flask==2.1.2
 flask_cors==3.0.10
-opencv-python==4.6.0.66
+opencv-python-headless==4.2.0.32
+tqdm==4.64.0
 gunicorn==20.1.0
 protobuf~=3.19.0

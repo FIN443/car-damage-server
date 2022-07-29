@@ -3,6 +3,8 @@ from base64 import encodebytes
 from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 import cv2
+
+# from tensorflow.keras.utils import get_file
 from models import Yolov4
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg"}
@@ -15,9 +17,18 @@ os.makedirs(uploads_dir, exist_ok=True)
 
 
 def get_response_image(img):
-    binary_cv = cv2.imencode('.PNG', img)[1].tobytes() # convert image to byte array
+    binary_cv = cv2.imencode(".PNG", img)[1].tobytes()  # convert image to byte array
     encoded_img = encodebytes(binary_cv).decode("ascii")  # encode as base64
     return encoded_img
+
+
+def delete_all_files(filePath):
+    if os.path.exists(filePath):
+        for file in os.scandir(filePath):
+            os.remove(file.path)
+        return "Remove All File"
+    else:
+        return "Directory Not Found"
 
 
 @app.route("/")
@@ -43,6 +54,8 @@ def predict():
             cv2_img.append(cv2.imread(f"instance/uploads/image{i}.png")[:, :, ::-1])
 
         # 2) load model
+        # url = "https://files.mybox.naver.com/.fileLink/nKo0AOxUtGjnYEsBihv62Gh3UP2e%2FUYNjqj7QXhgiN2xf8vtjPTV%2BG4eLBUZ0CEA15t4kk%2BKQqzu%2B9mmm6UpTAI%3D/weights.h5?authtoken=ReTsNfD9wtF1D4qqvSKg9AI%3D"
+        # weights_path = get_file("weights.h5", url)
         model = Yolov4(weight_path="instance/saved_models/weights.h5", class_name_path="instance/classes.txt")
 
         data = []
@@ -56,8 +69,11 @@ def predict():
             kind = list(set(kind))
 
             # 5) encoding image
-            endcoded_img = get_response_image(result_img[:,:,::-1])
+            endcoded_img = get_response_image(result_img[:, :, ::-1])
             data.append({"kind": kind, "imageBytes": endcoded_img})
+
+        # 6) clean uploads
+        delete_all_files("instance/uploads")
 
         return jsonify({"ok": True, "message": "done", "data": data})
 
