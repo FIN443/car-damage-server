@@ -488,6 +488,7 @@ def adjust_axes(r, t, fig, axes):
     # get axis limit
     x_lim = axes.get_xlim()
     axes.set_xlim([x_lim[0], x_lim[1]*propotion])
+'''
 
 
 def read_txt_to_list(path):
@@ -503,19 +504,19 @@ def visualize_bbox(image, bbox, class_name, color=(200, 0, 0), thickness=2):
     bbox = bbox.astype(int)
     x_min = bbox[0]
     y_min = bbox[1]
-    x_max = bbox[2]  
-    y_max = bbox[3]  
-   
+    x_max = bbox[2]
+    y_max = bbox[3]
+
     cv2.rectangle(image, (x_min, y_min), (x_max, y_max), color=color, thickness=thickness)
-    ((text_width, text_height), _) = cv2.getTextSize(class_name, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)    
+    ((text_width, text_height), _) = cv2.getTextSize(class_name, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)
     cv2.rectangle(image, (x_min, y_min - int(1.3 * text_height)), (x_min + text_width, y_min), color, -1)
     cv2.putText(
         image,
         text=class_name,
         org=(x_min, y_min - int(0.3 * text_height)),
         fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-        fontScale=1, 
-        color=(255, 255, 255), 
+        fontScale=1,
+        color=(255, 255, 255),
         lineType=cv2.LINE_AA,
         thickness=2,
     )
@@ -527,4 +528,69 @@ def visualize(image, bboxes, category_names):
     for bbox, category_name in zip(bboxes, category_names):
         class_name = category_name
         img = visualize_bbox(img, bbox, class_name)
-    return img '''
+    return img
+
+
+def search_save_in_video(video_path, save_path, model):
+    find_bboxes = 0
+
+    vid = cv2.VideoCapture(video_path)
+
+    if vid.isOpened() == False:
+        print("Can't open the video (%d)" % (video_path))
+        exit()
+
+    width = vid.get(cv2.CAP_PROP_FRAME_WIDTH)
+    height = vid.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    fps = vid.get(cv2.CAP_PROP_FPS)
+    fourcc = cv2.VideoWriter_fourcc(*"DIVX")
+
+    # 파일 stream 생성
+    out = cv2.VideoWriter(save_path, fourcc, fps, (int(width), int(height)))
+
+    if not out.isOpened():
+        print("File open failed!")
+        vid.release()
+        exit()
+
+    while True:
+        ret, frame = vid.read()
+
+        if frame is None:
+            break
+
+        if (int(vid.get(cv2.CAP_PROP_POS_FRAMES) % 10)) == 0:
+            bboxes_df = model.predict_img(
+                frame, random_color=True, plot_img=False, show_text=True, return_output=False, show_shape=False, show_box_count=False
+            )
+            # class name
+            class_ids = bboxes_df["class_name"]
+            # bbox x_center, y_center, w, h
+            bboxes = np.zeros((len(class_ids), 4))
+            bboxes[:, 0] = bboxes_df["x1"]
+            bboxes[:, 1] = bboxes_df["y1"]
+            bboxes[:, 2] = bboxes_df["x2"]
+            bboxes[:, 3] = bboxes_df["y2"]
+
+            if len(bboxes) > 0:
+                bboxes[:, [0, 2]] *= width / 416
+                bboxes[:, [1, 3]] *= height / 416
+                result = visualize(frame, bboxes, class_ids)
+                find_bboxes = 4
+
+            else:
+                result = frame
+
+        # bbox 를 찾으면 4프레임동안 bbox 표시
+        elif find_bboxes > 0:
+            result = visualize(frame, bboxes, class_ids)
+            find_bboxes -= 1
+        else:
+            result = frame
+
+        out.write(result)
+
+    # 재생 파일 종료
+    vid.release()
+    # 저장 파일 종료
+    out.release()

@@ -15,6 +15,9 @@ CORS(app, expose_headers="Authorization")
 uploads_dir = os.path.join(app.instance_path, "uploads")
 os.makedirs(uploads_dir, exist_ok=True)
 
+# 1) load model
+model = Yolov4(weight_path="instance/saved_models/weights.h5", class_name_path="instance/classes.txt")
+
 
 def get_response_image(img):
     binary_cv = cv2.imencode(".PNG", img)[1].tobytes()  # convert image to byte array
@@ -45,24 +48,18 @@ def predict():
         if image_num > 8:
             return jsonify({"ok": False, "message": "too many images"})
 
-        cv2_img = []
         # Save images
         for i in range(image_num):
             file = request.files[f"image{i}"]
             file.save(os.path.join(uploads_dir, file.filename))
-            # 1) load images
-            cv2_img.append(cv2.imread(f"instance/uploads/image{i}.png")[:, :, ::-1])
-
-        # 2) load model
-        # url = "https://files.mybox.naver.com/.fileLink/nKo0AOxUtGjnYEsBihv62Gh3UP2e%2FUYNjqj7QXhgiN2xf8vtjPTV%2BG4eLBUZ0CEA15t4kk%2BKQqzu%2B9mmm6UpTAI%3D/weights.h5?authtoken=ReTsNfD9wtF1D4qqvSKg9AI%3D"
-        # weights_path = get_file("weights.h5", url)
-        model = Yolov4(weight_path="instance/saved_models/weights.h5", class_name_path="instance/classes.txt")
 
         data = []
         # Predict images
         for i in range(image_num):
+            # 2) load image
+            cv2_img = cv2.imread(f"instance/uploads/image{i}.png")[:, :, ::-1]
             # 3) predict image
-            result_img, result_bbox = model.predict_img(cv2_img[i], return_output=True, plot_img=False, show_shape=False, show_box_count=False)
+            result_img, result_bbox = model.predict_img(cv2_img, return_output=True, plot_img=False, show_shape=False, show_box_count=False)
 
             # 4) get damage categories
             kind = result_bbox["class_name"].tolist()
